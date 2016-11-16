@@ -8,16 +8,21 @@ type Config struct {
 }
 
 type SqlbeatConfig struct {
-	Period            string   `yaml:"period"`
-	DBType            string   `yaml:"dbtype"`
-	Hostname          string   `yaml:"hostname"`
-	Port              string   `yaml:"port"`
-	Username          string   `yaml:"username"`
-	Password          string   `yaml:"password"`
-	EncryptedPassword string   `yaml:"encryptedpassword"`
-	Database          string   `yaml:"database"`
-	PostgresSSLMode   string   `yaml:"postgressslmode"`
-	Queries           []string `yaml:"queries"`
-	QueryTypes        []string `yaml:"querytypes"`
-	DeltaWildcard     string   `yaml:"deltawildcard"`
+	Period            string  `yaml:"period"`
+	DBType            string  `yaml:"dbtype"`
+	Hostname          string  `yaml:"hostname"`
+	Port              string  `yaml:"port"`
+	Username          string  `yaml:"username"`
+	Password          string  `yaml:"password"`
+	EncryptedPassword string  `yaml:"encryptedpassword"`
+	Database          string  `yaml:"database"`
+	PostgresSSLMode   string  `yaml:"postgressslmode"`
+	Queries           []Query `yaml:"queries"`
+	DeltaWildcard     string  `yaml:"deltawildcard"`
+}
+
+type Query struct {
+	Sql  string `yaml:"sql"`
+	Type string `yaml:"type"`
+	Name string `yaml:"type"`
 }

@@ -38,8 +38,7 @@ type Sqlbeat struct {
 	passwordAES     string
 	database        string
 	postgresSSLMode string
-	queries         []string
-	queryTypes      []string
+	queries         []config.Query
 	deltaWildcard   string
 
 	oldValues    common.MapStr
@@ -124,11 +123,6 @@ func (bt *Sqlbeat) Setup(b *beat.Beat) error {
 
 	if len(bt.beatConfig.Sqlbeat.Queries) < 1 {
 		err := fmt.Errorf("There are no queries to execute")
-		return err
-	}
-
-	if len(bt.beatConfig.Sqlbeat.Queries) != len(bt.beatConfig.Sqlbeat.QueryTypes) {
-		err := fmt.Errorf("Config file error, queries != queryTypes array length (each query should have a corresponding type on the same index)")
 		return err
 	}
 
@@ -227,12 +221,11 @@ func (bt *Sqlbeat) Setup(b *beat.Beat) error {
 	bt.database = bt.beatConfig.Sqlbeat.Database
 	bt.postgresSSLMode = bt.beatConfig.Sqlbeat.PostgresSSLMode
 	bt.queries = bt.beatConfig.Sqlbeat.Queries
-	bt.queryTypes = bt.beatConfig.Sqlbeat.QueryTypes
 	bt.deltaWildcard = bt.beatConfig.Sqlbeat.DeltaWildcard
 
 	logp.Info("Total # of queries to execute: %d", len(bt.queries))
-	for index, queryStr := range bt.queries {
-		logp.Info("Query #%d (type: %s): %s", index+1, bt.queryTypes[index], queryStr)
+	for index, query := range bt.queries {
+		logp.Info("Query #%d (type: %s): %s", index+1, query.Type, query.Sql)
 	}
 
 	return nil
@@ -303,10 +296,10 @@ func (bt *Sqlbeat) beat(b *beat.Beat) error {
 	var twoColumnEvent common.MapStr
 
 LoopQueries:
-	for index, queryStr := range bt.queries {
+	for index, query := range bt.queries {
 		// Log the query run time and run the query
 		dtNow := time.Now()
-		rows, err := db.Query(queryStr)
+		rows, err := db.Query(query.Sql)
 		if err != nil {
 			return err
 		}
@@ -318,40 +311,41 @@ LoopQueries:
 		}
 
 		// Populate the two-columns event
-		if bt.queryTypes[index] == queryTypeTwoColumns {
+		if query.Type == queryTypeTwoColumns {
 			twoColumnEvent = common.MapStr{
 				"@timestamp": common.Time(dtNow),
 				"type":       bt.dbType,
+				"name":       query.Name,
 			}
 		}
 
 	LoopRows:
 		for rows.Next() {
 
-			switch bt.queryTypes[index] {
+			switch query.Type {
 			case queryTypeSingleRow, queryTypeSlaveDelay:
 				// Generate an event from the current row
-				event, err := bt.generateEventFromRow(rows, columns, bt.queryTypes[index], dtNow)
+				event, err := bt.generateEventFromRow(rows, columns, query, dtNow)
 
 				if err != nil {
 					logp.Err("Query #%v error generating event from rows: %v", index, err)
 				} else if event != nil {
 					b.Events.PublishEvent(event)
-					logp.Info("%v event sent", bt.queryTypes[index])
+					logp.Info("%v event sent", query.Type)
 				}
 				// breaking after the first row
 				break LoopRows
 
 			case queryTypeMultipleRows:
 				// Generate an event from the current row
-				event, err := bt.generateEventFromRow(rows, columns, bt.queryTypes[index], dtNow)
+				event, err := bt.generateEventFromRow(rows, columns, query, dtNow)
 
 				if err != nil {
 					logp.Err("Query #%v error generating event from rows: %v", index, err)
 					break LoopRows
 				} else if event != nil {
 					b.Events.PublishEvent(event)
-					logp.Info("%v event sent", bt.queryTypes[index])
+					logp.Info("%v event sent", query.Type)
 				}
 
 				// Move to the next row
@@ -372,7 +366,7 @@ LoopQueries:
 		}
 
 		// If the two-columns event has data, publish it
-		if bt.queryTypes[index] == queryTypeTwoColumns && len(twoColumnEvent) > 2 {
+		if query.Type == queryTypeTwoColumns && len(twoColumnEvent) > 2 {
 			b.Events.PublishEvent(twoColumnEvent)
 			logp.Info("%v event sent", queryTypeTwoColumns)
 			twoColumnEvent = nil
@@ -507,7 +501,7 @@ func (bt *Sqlbeat) appendRowToEvent(event common.MapStr, row *sql.Rows, columns 
 }
 
 // generateEventFromRow creates a new event from the row data and returns it
-func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, queryType string, rowAge time.Time) (common.MapStr, error) {
+func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, query config.Query, rowAge time.Time) (common.MapStr, error) {
 
 	// Make a slice for the values
 	values := make([]string, len(columns))
@@ -522,6 +516,7 @@ func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, queryTy
 	event := common.MapStr{
 		"@timestamp": common.Time(rowAge),
 		"type":       bt.dbType,
+		"name":       query.Name,
 	}
 
 	// Get RawBytes from data
@@ -538,7 +533,7 @@ func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, queryTy
 		strColType := columnTypeString
 
 		// Skip column proccessing when query type is show-slave-delay and the column isn't Seconds_Behind_Master
-		if queryType == queryTypeSlaveDelay && strColName != columnNameSlaveDelay {
+		if query.Type == queryTypeSlaveDelay && strColName != columnNameSlaveDelay {
 			continue
 		}
 
@@ -558,7 +553,7 @@ func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, queryTy
 		}
 
 		// If query type is single row and the column name ends with the deltaWildcard
-		if queryType == queryTypeSingleRow && strings.HasSuffix(strColName, bt.deltaWildcard) {
+		if query.Type == queryTypeSingleRow && strings.HasSuffix(strColName, bt.deltaWildcard) {
 			var exists bool
 			_, exists = bt.oldValues[strColName]
 
