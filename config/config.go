@@ -22,7 +22,8 @@ type SqlbeatConfig struct {
 }
 
 type Query struct {
-	Sql  string `yaml:"sql"`
-	Type string `yaml:"type"`
-	Name string `yaml:"type"`
+	Sql         string `yaml:"sql"`
+	Type        string `yaml:"type"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
 }

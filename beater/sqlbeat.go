@@ -315,7 +315,12 @@ LoopQueries:
 			twoColumnEvent = common.MapStr{
 				"@timestamp": common.Time(dtNow),
 				"type":       bt.dbType,
-				"name":       query.Name,
+			}
+			if query.Name != "" {
+				twoColumnEvent["name"] = query.Name
+			}
+			if query.Description != "" {
+				twoColumnEvent["description"] = query.Description
 			}
 		}
 
@@ -516,7 +521,12 @@ func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, query c
 	event := common.MapStr{
 		"@timestamp": common.Time(rowAge),
 		"type":       bt.dbType,
-		"name":       query.Name,
+	}
+	if query.Name != "" {
+		event["name"] = query.Name
+	}
+	if query.Description != "" {
+		event["description"] = query.Description
 	}
 
 	// Get RawBytes from data
