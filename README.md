@@ -1,5 +1,5 @@
 # Sqlbeat
-Fully customizable Beat for MySQL/Microsoft SQL Server/PostgreSQL servers - this beat can ship the results of any query defined on the config file to Elasticsearch.
+Fully customizable Beat for MySQL/Microsoft SQL Server/Oracle/PostgreSQL servers - this beat can ship the results of any query defined on the config file to Elasticsearch.
 
 
 ## Current status
@@ -7,14 +7,13 @@ Sqlbeat still on beta.
 
 #### To Do:
 * Add SSPI support for MSSQL
-* Add support for Oracle
 * Add support for SQLite
 * (Thinking about it) Add option to save connection string in the config file - will open support for all [SQLDrivers](https://github.com/golang/go/wiki/SQLDrivers).
 
 
 ## Features
 
-* Connect to MySQL / Microsoft SQL Server / PostgreSQL and run queries
+* Connect to MySQL / Microsoft SQL Server / Oracle / PostgreSQL and run queries
  * `single-row` queries will be translated as columnname:value.
  * `two-columns` will be translated as value-column1:value-column2 for each row.
  * `multiple-rows` each row will be a document (with columnname:value) - no DELTA support.

@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adibendahan/sqlbeat/config"
+	"sqlbeat/config"
+
 	"github.com/elastic/beats/libbeat/beat"
 	"github.com/elastic/beats/libbeat/cfgfile"
 	"github.com/elastic/beats/libbeat/common"
@@ -21,6 +22,7 @@ import (
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-oci8"
 )
 
 // Sqlbeat is a struct to hold the beat config & info
@@ -56,9 +58,10 @@ const (
 	secret = "github.com/adibendahan/mysqlbeat"
 
 	// supported DB types
-	dbtMySQL = "mysql"
-	dbtMSSQL = "mssql"
-	dbtPSQL  = "postgres"
+	dbtMySQL  = "mysql"
+	dbtMSSQL  = "mssql"
+	dbtPSQL   = "postgres"
+	dbtOracle = "oci8"
 
 	// default values
 	defaultPeriod        = "10s"
@@ -66,6 +69,7 @@ const (
 	defaultPortMySQL     = "3306"
 	defaultPortMSSQL     = "1433"
 	defaultPortPSQL      = "5432"
+	defaultPortOracle    = "1524"
 	defaultUsername      = "sqlbeat_user"
 	defaultPassword      = "sqlbeat_pass"
 	defaultDeltaWildcard = "__DELTA"
@@ -111,10 +115,10 @@ func (bt *Sqlbeat) Setup(b *beat.Beat) error {
 
 	// Config errors handling
 	switch bt.beatConfig.Sqlbeat.DBType {
-	case dbtMSSQL, dbtMySQL, dbtPSQL:
+	case dbtMSSQL, dbtMySQL, dbtPSQL, dbtOracle:
 		break
 	default:
-		err := fmt.Errorf("Unknown DB type, supported DB types: `mssql`, `mysql`, `postgres`")
+		err := fmt.Errorf("Unknown DB type, supported DB types: `mssql`, `mysql`, `postgres`, `ora`")
 		return err
 	}
 
@@ -126,6 +130,13 @@ func (bt *Sqlbeat) Setup(b *beat.Beat) error {
 	if len(bt.beatConfig.Sqlbeat.Queries) != len(bt.beatConfig.Sqlbeat.QueryTypes) {
 		err := fmt.Errorf("Config file error, queries != queryTypes array length (each query should have a corresponding type on the same index)")
 		return err
+	}
+
+	if bt.beatConfig.Sqlbeat.DBType == dbtOracle {
+		if bt.beatConfig.Sqlbeat.Database == "" {
+			err := fmt.Errorf("Database must be selected when using DB type oracle")
+			return err
+		}
 	}
 
 	if bt.beatConfig.Sqlbeat.DBType == dbtPSQL {
@@ -158,6 +169,8 @@ func (bt *Sqlbeat) Setup(b *beat.Beat) error {
 			bt.beatConfig.Sqlbeat.Port = defaultPortMySQL
 		case dbtPSQL:
 			bt.beatConfig.Sqlbeat.Port = defaultPortPSQL
+		case dbtOracle:
+			bt.beatConfig.Sqlbeat.Port = defaultPortOracle
 		}
 		logp.Info("Port not selected, proceeding with '%v' as default", bt.beatConfig.Sqlbeat.Port)
 	}
@@ -273,6 +286,11 @@ func (bt *Sqlbeat) beat(b *beat.Beat) error {
 	case dbtPSQL:
 		connString = fmt.Sprintf("%v://%v:%v@%v:%v/%v?sslmode=%v",
 			dbtPSQL, bt.username, bt.password, bt.hostname, bt.port, bt.database, bt.postgresSSLMode)
+
+	case dbtOracle:
+		connString = fmt.Sprintf("%v/%v@%v:%v/%v",
+			bt.username, bt.password, bt.hostname, bt.port, bt.database)
+
 	}
 
 	db, err := sql.Open(bt.dbType, connString)
@@ -375,7 +393,7 @@ LoopQueries:
 func (bt *Sqlbeat) appendRowToEvent(event common.MapStr, row *sql.Rows, columns []string, rowAge time.Time) error {
 
 	// Make a slice for the values
-	values := make([]sql.RawBytes, len(columns))
+	values := make([]string, len(columns))
 
 	// Copy the references into such a []interface{} for row.Scan
 	scanArgs := make([]interface{}, len(values))
@@ -492,7 +510,7 @@ func (bt *Sqlbeat) appendRowToEvent(event common.MapStr, row *sql.Rows, columns 
 func (bt *Sqlbeat) generateEventFromRow(row *sql.Rows, columns []string, queryType string, rowAge time.Time) (common.MapStr, error) {
 
 	// Make a slice for the values
-	values := make([]sql.RawBytes, len(columns))
+	values := make([]string, len(columns))
 
 	// Copy the references into such a []interface{} for row.Scan
 	scanArgs := make([]interface{}, len(values))
