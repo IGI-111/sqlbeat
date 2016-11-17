@@ -26,4 +26,5 @@ type Query struct {
 	Type        string `yaml:"type"`
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	Interval    string `yaml:"interval"`
 }

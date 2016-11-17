@@ -78,6 +78,7 @@ const (
 	queryTypeMultipleRows = "multiple-rows"
 	queryTypeTwoColumns   = "two-columns"
 	queryTypeSlaveDelay   = "show-slave-delay"
+	queryTypeHistory      = "history"
 
 	// special column names values
 	columnNameSlaveDelay = "Seconds_Behind_Master"
@@ -356,6 +357,23 @@ LoopQueries:
 				// Move to the next row
 				continue LoopRows
 
+			case queryTypeHistory:
+				// Generate an event from the current row
+				events, err := bt.generateHistoryEventsFromRow(rows, columns, query, dtNow)
+
+				if err != nil {
+					logp.Err("Query #%v error generating event from rows: %v", index, err)
+					break LoopRows
+				} else if events != nil {
+					for _, e := range events {
+						b.Events.PublishEvent(e)
+						logp.Info("%v event sent", query.Type)
+					}
+				}
+
+				// Move to the next row
+				continue LoopRows
+
 			case queryTypeTwoColumns:
 				// append current row to the two-columns event
 				err := bt.appendRowToEvent(twoColumnEvent, rows, columns, dtNow)
@@ -503,6 +521,131 @@ func (bt *Sqlbeat) appendRowToEvent(event common.MapStr, row *sql.Rows, columns 
 
 	// Great success!
 	return nil
+}
+
+// generateHistoryEventsFromRow makes individual events for every increment offset in the columns
+func (bt *Sqlbeat) generateHistoryEventsFromRow(row *sql.Rows, columns []string, query config.Query, rowAge time.Time) ([]common.MapStr, error) {
+	// Make a slice for the values
+	values := make([]string, len(columns))
+
+	// Copy the references into such a []interface{} for row.Scan
+	scanArgs := make([]interface{}, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Create the event and populate it
+	baseEvent := common.MapStr{
+		"type": bt.dbType,
+	}
+	if query.Name != "" {
+		baseEvent["name"] = query.Name
+	}
+	if query.Description != "" {
+		baseEvent["description"] = query.Description
+	}
+
+	// Get RawBytes from data
+	err := row.Scan(scanArgs...)
+	if err != nil {
+		return nil, err
+	}
+
+	var offsets []int64
+	var offsetIndices []int
+
+	for i, col := range values {
+		// Get column name and string value
+		strColName := string(columns[i])
+		strColValue := string(col)
+		strColType := columnTypeString
+
+		// is it an offset or a proper value?
+		offset, err := strconv.ParseInt(strColName, 0, 64)
+		if err == nil {
+			offsets = append(offsets, offset)
+			offsetIndices = append(offsetIndices, i)
+			continue
+		}
+
+		// Skip column proccessing when query type is show-slave-delay and the column isn't Seconds_Behind_Master
+		if query.Type == queryTypeSlaveDelay && strColName != columnNameSlaveDelay {
+			continue
+		}
+
+		// Try to parse the value to an int64
+		nColValue, err := strconv.ParseInt(strColValue, 0, 64)
+		if err == nil {
+			strColType = columnTypeInt
+		}
+
+		// Try to parse the value to a float64
+		fColValue, err := strconv.ParseFloat(strColValue, 64)
+		if err == nil {
+			// If it's not already an established int64, set type to float
+			if strColType == columnTypeString {
+				strColType = columnTypeFloat
+			}
+		}
+
+		// If query type is single row and the column name ends with the deltaWildcard
+		if strColType == columnTypeString {
+			baseEvent[strColName] = strColValue
+		} else if strColType == columnTypeInt {
+			baseEvent[strColName] = nColValue
+		} else if strColType == columnTypeFloat {
+			baseEvent[strColName] = fColValue
+		}
+	}
+
+	if len(offsets) <= 0 {
+		err := fmt.Errorf("No offset columns, this is probably not a `history` type query")
+		return nil, err
+	}
+
+	offsetLength, durationParseError := time.ParseDuration(query.Interval)
+	if durationParseError != nil {
+		return nil, durationParseError
+	}
+
+	events := make([]common.MapStr, len(offsets))
+	for i := range events {
+		events[i] = common.MapStr{}
+	}
+	for i, evt := range events {
+		evt.Update(baseEvent)
+		evt["@timestamp"] = time.Time(rowAge).Add(time.Duration(offsets[i]) * offsetLength)
+
+		// Get column name and string value
+		strColValue := string(values[offsetIndices[i]])
+		strColType := columnTypeString
+
+		// Try to parse the value to an int64
+		nColValue, err := strconv.ParseInt(strColValue, 0, 64)
+		if err == nil {
+			strColType = columnTypeInt
+		}
+
+		// Try to parse the value to a float64
+		fColValue, err := strconv.ParseFloat(strColValue, 64)
+		if err == nil {
+			// If it's not already an established int64, set type to float
+			if strColType == columnTypeString {
+				strColType = columnTypeFloat
+			}
+		}
+
+		// If query type is single row and the column name ends with the deltaWildcard
+		if strColType == columnTypeString {
+			evt["value"] = strColValue
+		} else if strColType == columnTypeInt {
+			evt["value"] = nColValue
+		} else if strColType == columnTypeFloat {
+			evt["value"] = fColValue
+		}
+	}
+
+	return events, nil
 }
 
 // generateEventFromRow creates a new event from the row data and returns it
