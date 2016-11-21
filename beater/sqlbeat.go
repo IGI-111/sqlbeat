@@ -284,7 +284,6 @@ func (bt *Sqlbeat) beat(b *beat.Beat) error {
 	case dbtOracle:
 		connString = fmt.Sprintf("%v/%v@%v:%v/%v",
 			bt.username, bt.password, bt.hostname, bt.port, bt.database)
-
 	}
 
 	db, err := sql.Open(bt.dbType, connString)
@@ -551,7 +550,7 @@ func (bt *Sqlbeat) generateHistoryEventsFromRow(row *sql.Rows, columns []string,
 		return nil, err
 	}
 
-	var offsets []int64
+	var offsets []int
 	var offsetIndices []int
 
 	for i, col := range values {
@@ -561,9 +560,9 @@ func (bt *Sqlbeat) generateHistoryEventsFromRow(row *sql.Rows, columns []string,
 		strColType := columnTypeString
 
 		// is it an offset or a proper value?
-		offset, err := strconv.ParseInt(strColName, 0, 64)
+		offset, err := strconv.ParseInt(strColName, 0, 32)
 		if err == nil {
-			offsets = append(offsets, offset)
+			offsets = append(offsets, int(offset))
 			offsetIndices = append(offsetIndices, i)
 			continue
 		}
@@ -603,18 +602,24 @@ func (bt *Sqlbeat) generateHistoryEventsFromRow(row *sql.Rows, columns []string,
 		return nil, err
 	}
 
-	offsetLength, durationParseError := time.ParseDuration(query.Interval)
-	if durationParseError != nil {
-		return nil, durationParseError
-	}
-
 	events := make([]common.MapStr, len(offsets))
 	for i := range events {
 		events[i] = common.MapStr{}
 	}
 	for i, evt := range events {
 		evt.Update(baseEvent)
-		evt["@timestamp"] = time.Time(rowAge).Add(time.Duration(offsets[i]) * offsetLength)
+
+		time := time.Time(rowAge)
+		switch query.Interval {
+		case "day":
+			time = time.AddDate(0, 0, offsets[i])
+		case "week":
+			time = time.AddDate(0, 0, 7*offsets[i])
+		case "month":
+			time = time.AddDate(0, offsets[i], 0)
+		}
+
+		evt["@timestamp"] = common.Time(time)
 
 		// Get column name and string value
 		strColValue := string(values[offsetIndices[i]])
