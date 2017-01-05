@@ -79,6 +79,7 @@ const (
 	queryTypeTwoColumns   = "two-columns"
 	queryTypeSlaveDelay   = "show-slave-delay"
 	queryTypeHistory      = "history"
+	queryTypeLine         = "lines"
 
 	// special column names values
 	columnNameSlaveDelay = "Seconds_Behind_Master"
@@ -373,6 +374,21 @@ LoopQueries:
 				// Move to the next row
 				continue LoopRows
 
+			case queryTypeLine:
+				// Generate an event from the current row
+				event, err := bt.generateLineEventFromRow(rows, columns, query, dtNow)
+
+				if err != nil {
+					logp.Err("Query #%v error generating event from rows: %v", index, err)
+					break LoopRows
+				} else if event != nil {
+					b.Events.PublishEvent(event)
+					logp.Info("%v event sent", query.Type)
+				}
+
+				// Move to the next row
+				continue LoopRows
+
 			case queryTypeTwoColumns:
 				// append current row to the two-columns event
 				err := bt.appendRowToEvent(twoColumnEvent, rows, columns, dtNow)
@@ -595,6 +611,10 @@ func (bt *Sqlbeat) generateHistoryEventsFromRow(row *sql.Rows, columns []string,
 		} else if strColType == columnTypeFloat {
 			baseEvent[strColName] = fColValue
 		}
+
+		if i == 0 {
+			baseEvent["rowId"] = strColValue
+		}
 	}
 
 	if len(offsets) <= 0 {
@@ -651,6 +671,87 @@ func (bt *Sqlbeat) generateHistoryEventsFromRow(row *sql.Rows, columns []string,
 	}
 
 	return events, nil
+}
+
+func (bt *Sqlbeat) generateLineEventFromRow(row *sql.Rows, columns []string, query config.Query, rowAge time.Time) (common.MapStr, error) {
+
+	// Make a slice for the values
+	values := make([]string, len(columns))
+
+	// Copy the references into such a []interface{} for row.Scan
+	scanArgs := make([]interface{}, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Create the event and populate it
+	event := common.MapStr{
+		"@timestamp": common.Time(rowAge),
+		"type":       bt.dbType,
+	}
+	if query.Name != "" {
+		event["name"] = query.Name
+	}
+	if query.Description != "" {
+		event["description"] = query.Description
+	}
+
+	// Get RawBytes from data
+	err := row.Scan(scanArgs...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Loop on all columns
+	for i, col := range values {
+		// Get column name and string value
+		strColName := string(columns[i])
+		strColValue := string(col)
+		strColType := columnTypeString
+
+		// this is where the magic happens
+		if strColName == "PERIOD" {
+			format := "D060102"
+			t, err := time.Parse(format, strColValue)
+			if err != nil {
+				err := fmt.Errorf("Could not parse time, this is probably not a `line` event")
+				return nil, err
+			}
+
+			event["@timestamp"] = common.Time(t)
+			continue
+		}
+
+		// Try to parse the value to an int64
+		nColValue, err := strconv.ParseInt(strColValue, 0, 64)
+		if err == nil {
+			strColType = columnTypeInt
+		}
+
+		// Try to parse the value to a float64
+		fColValue, err := strconv.ParseFloat(strColValue, 64)
+		if err == nil {
+			// If it's not already an established int64, set type to float
+			if strColType == columnTypeString {
+				strColType = columnTypeFloat
+			}
+		}
+
+		if strColType == columnTypeString {
+			event[strColName] = strColValue
+		} else if strColType == columnTypeInt {
+			event[strColName] = nColValue
+		} else if strColType == columnTypeFloat {
+			event[strColName] = fColValue
+		}
+	}
+
+	// If the event has no data, set to nil
+	if len(event) == 2 {
+		event = nil
+	}
+
+	return event, nil
 }
 
 // generateEventFromRow creates a new event from the row data and returns it
